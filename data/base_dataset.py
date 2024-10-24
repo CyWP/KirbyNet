@@ -20,7 +20,7 @@ class BaseDataset(data.Dataset):
         mean: N-dimensional mean
         std: N-dimensional standard deviation
         ninput_channels: N
-        (here N=5)
+        (here N=6)
         """
 
         mean_std_cache = os.path.join(self.root, "mean_std_cache.p")
