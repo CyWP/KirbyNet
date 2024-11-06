@@ -3,6 +3,7 @@
 ## run the training
 python train.py \
 --dataroot datasets/cubes \
+--gpu_ids -1 \
 --name cubes \
 --ncf 64 128 256 256 \
 --pool_res 600 450 300 210 \
