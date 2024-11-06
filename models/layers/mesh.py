@@ -10,6 +10,18 @@ from models.layers.mesh_prepare import fill_mesh
 class Mesh:
 
     def __init__(self, file=None, opt=None, hold_history=False, export_folder=""):
+        """
+        Notes for self on member variables
+        vs: (V x 3 list)vertices with actual 3d coordinates
+        ve: (V x ~6 list)holds edge_id (idx in edges) of every edge connected to a given vertex. Same size as
+        edges: holds idx to two points in vs
+        edge_areas:
+        v_mask: mask for vertices that still "exist": corresponding to idxs in vs, True if exists, False if not
+        pool_count:
+        features:
+        edge_areas:
+        history_data:
+        """
         self.vs = self.v_mask = self.filename = self.features = self.edge_areas = None
         self.edges = self.gemm_edges = self.sides = None
         self.pool_count = 0
@@ -31,10 +43,12 @@ class Mesh:
         # update pA
         v_a.__iadd__(v_b)
         v_a.__itruediv__(2)
-        self.v_mask[edge[1]] = False
-        mask = self.edges == edge[1]
+        self.v_mask[edge[1]] = False  # masking point since it no longer is used
+        mask = self.edges == edge[1]  # Gets all indices at which point was used
         self.ve[edge[0]].extend(self.ve[edge[1]])
-        self.edges[mask] = edge[0]
+        self.edges[mask] = edge[
+            0
+        ]  # Essentially replacing all connection of since delted point with the new averaged point.
 
     def remove_vertex(self, v):
         self.v_mask[v] = False

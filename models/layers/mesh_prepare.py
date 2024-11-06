@@ -160,15 +160,19 @@ def build_gemm(mesh, faces, face_areas):
         for i in range(3):
             cur_edge = (face[i], face[(i + 1) % 3])
             faces_edges.append(cur_edge)
+            # Easy to retriweve edges in face, just grouped by 3 adjacent idx
+            # Also, this is a halfedge datastructure
         for idx, edge in enumerate(faces_edges):
-            edge = tuple(sorted(list(edge)))
+            edge = tuple(sorted(list(edge)))  # Why sort the vertices in edge?
             faces_edges[idx] = edge
             if edge not in edge2key:
-                edge2key[edge] = edges_count
+                edge2key[edge] = edges_count  # this is probably why you need to sort
                 edges.append(list(edge))
                 edge_nb.append([-1, -1, -1, -1])
                 sides.append([-1, -1, -1, -1])
-                mesh.ve[edge[0]].append(edges_count)
+                mesh.ve[edge[0]].append(
+                    edges_count
+                )  # ve seems to use a vertex index as key
                 mesh.ve[edge[1]].append(edges_count)
                 mesh.edge_areas.append(0)
                 nb_count.append(0)
@@ -381,6 +385,7 @@ def extract_features(mesh):
                 dihedral_angle,
                 symmetric_opposite_angles,
                 symmetric_ratios,
+                dot_skew,
             ]:
                 feature = extractor(mesh, edge_points)
                 features.append(feature)
@@ -423,6 +428,18 @@ def symmetric_ratios(mesh, edge_points):
         (np.expand_dims(ratios_a, 0), np.expand_dims(ratios_b, 0)), axis=0
     )
     return np.sort(ratios, axis=0)
+
+
+def dot_skew(mesh, edge_points):
+    """computes the dot product between the edge vector and the vector
+    of opposite vertices, normalized by the product of their norms.
+    Essentially noting if opposing faces skew in the same or opposing sides.
+    """
+    edge_vec = mesh.vs[edge_points[:, 0]] - mesh.vs[edge_points[:, 1]]
+    diag_vec = mesh.vs[edge_points[:, 2]] - mesh.vs[edge_points[:, 3]]
+    max_dot = np.linalg.norm(edge_vec, axis=1) * np.linalg.norm(diag_vec, axis=1)
+    dot = np.abs(np.sum(edge_vec * diag_vec, axis=1)).reshape((1, -1))
+    return dot / max_dot
 
 
 def get_edge_points(mesh):
