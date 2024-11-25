@@ -13,6 +13,11 @@ def CreateDataset(opt):
         from data.classification_data import ClassificationData
 
         dataset = ClassificationData(opt)
+    elif opt.dataset_mode == "unsupervised":
+        from data.unsupervised_data import UnsupervisedData 
+
+        dataset = UnsupervisedData(opt)
+
     return dataset
 
 

@@ -7,3 +7,6 @@
 checkpoints
 datasets
 runs
+
+#other
+logs/*
