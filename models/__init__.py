@@ -1,5 +1,12 @@
 def create_model(opt):
-    from .mesh_classifier import ClassifierModel  # todo - get rid of this ?
+    if opt.dataset_mode == "unsupervised":
 
-    model = ClassifierModel(opt)
+        from .mesh_smoothing import SmoothingModel  # todo - get rid of this ?
+        model = SmoothingModel(opt)
+
+    else:
+
+        from .mesh_classifier import ClassifierModel
+        model = ClassifierModel(opt)
+
     return model

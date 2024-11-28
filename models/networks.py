@@ -15,6 +15,7 @@ from models.layers.mesh_unpool import MeshUnpool
 
 
 def get_norm_layer(norm_type="instance", num_groups=1):
+    print(f"Num groups: {num_groups}")
     if norm_type == "batch":
         norm_layer = functools.partial(nn.BatchNorm2d, affine=True)
     elif norm_type == "instance":
@@ -39,6 +40,7 @@ def get_norm_args(norm_layer, nfeats_list):
         raise NotImplementedError(
             "normalization layer [%s] is not found" % norm_layer.func.__name__
         )
+    print(f"Norm args: {norm_args}")
     return norm_args
 
 
@@ -139,6 +141,16 @@ def define_classifier(
         net = MeshEncoderDecoder(
             pool_res, down_convs, up_convs, blocks=opt.resblocks, transfer_data=True
         )
+    elif arch == "msmoothnet":
+         net = MeshSmoothNet(
+            norm_layer,
+            input_nc,
+            ncf,
+            ninput_edges,
+            opt.pool_res,
+            opt.fc_n,
+            opt.resblocks,
+        )
     else:
         raise NotImplementedError("Encoder model name [%s] is not recognized" % arch)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -168,7 +180,7 @@ class MeshSmoothNet(nn.Module):
         fc_n,
         nresblocks=3,
     ):
-         super(MeshSmoothNet, self).__init__()
+        super(MeshSmoothNet, self).__init__()
         self.k = [nf0] + conv_res
         self.res = [input_res] + pool_res
         norm_args = get_norm_args(norm_layer, self.k[1:])
@@ -177,16 +189,18 @@ class MeshSmoothNet(nn.Module):
             setattr(self, "conv{}".format(i), MResConv(ki, self.k[i + 1], nresblocks))
             setattr(self, "norm{}".format(i), norm_layer(**norm_args[i]))
             setattr(self, "pool{}".format(i), MeshPool(self.res[i + 1]))
-        self.gp = torch.nn.AvgPool1d(self.res[-1])
 
     def forward(self, x, mesh):
-
+        #print(f"Entering. num_edges: {mesh[0].edges_count}, gemm: {mesh[0].gemm_edges.shape}")
         for i in range(len(self.k) - 1):
             x = getattr(self, "conv{}".format(i))(x, mesh)
             x = F.relu(getattr(self, "norm{}".format(i))(x))
             x = getattr(self, "pool{}".format(i))(x, mesh)
-            x = self.gp(x)
-            return x
+            #print(f"After pool{i}. x: {x.shape}, num_edges:{mesh[0].edges_count} gemm: {mesh[0].gemm_edges.shape}")
+            #print(f"Shape after block {i}: {x.shape}")
+        #print("x: ", x[:, :, :])
+
+        return x
 
 
 class MeshConvNet(nn.Module):
@@ -224,6 +238,7 @@ class MeshConvNet(nn.Module):
             x = getattr(self, "conv{}".format(i))(x, mesh)
             x = F.relu(getattr(self, "norm{}".format(i))(x))
             x = getattr(self, "pool{}".format(i))(x, mesh)
+            #print(f"Shape after block {i}: {x.shape}")
 
         x = self.gp(x)
         x = x.view(-1, self.k[-1])

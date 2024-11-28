@@ -1,8 +1,10 @@
 import torch
+from torch.nn import ConstantPad2d
+import torch.nn.functional as F 
 from . import networks
 from os.path import join
 from util.util import seg_accuracy, print_network
-
+import numpy as np
 
 class SmoothingModel:
     """Class for training Model weights
@@ -29,10 +31,11 @@ class SmoothingModel:
         self.loss = None
 
         # load/define networks
-        self.net = networks.MeshSmoothNet(
+        self.net = networks.define_classifier(
             opt.input_nc,
             opt.ncf,
             opt.ninput_edges,
+            0,
             opt,
             self.gpu_ids,
             opt.arch,
@@ -60,16 +63,17 @@ class SmoothingModel:
         )
         self.mesh = data["mesh"]
         #Debugging to figure out organization of data
-        print(f"Edge features Shape: {self.edge_features.shape}")
-        print(f"Num meshes: {len(self.mesh)}")
-        print(f"Meshes: {[mesh in self.mesh]}")
+        #print(f"Edge features Shape: {self.edge_features.shape}")
 
     def forward(self):
         out = self.net(self.edge_features, self.mesh)
         return out
 
     def backward(self, out):
-        self.loss = self.criterion(out, self.objective())
+        norm = torch.norm(out)
+        inorm = 1/norm
+        print("norm", norm)
+        self.loss = self.criterion(out*inorm, self.objective(out)*inorm)*norm
         self.loss.backward()
 
     def optimize_parameters(self):
@@ -77,11 +81,23 @@ class SmoothingModel:
         out = self.forward()
         self.backward(out)
         self.optimizer.step()
-
-    def objective(self):
+    
+    def objective(self, out):
         # Compute average of neighbors for every unmasked edge
-        pass
-
+        obj = 0.2 * out
+        for mesh_idx in range(out.shape[0]):
+            m = self.mesh[mesh_idx]
+            for i in range(4):
+                """
+                rowval = out[mesh_idx, :, m.gemm_edges[:, i].reshape(-1)]
+                if out.shape[-1] != rowval.shape[-1]:
+                    rowval = ConstantPad2d((0, out.shape[-1]-rowval.shape[-1], 0, 0), 0)(rowval)
+                obj[mesh_idx] += 0.2 * rowval
+                """
+                rowval = torch.sum(out[mesh_idx, :, m.gemm_edges[:, i].reshape(-1)], dim=0)
+                obj[mesh_idx] += 0.2 * F.pad(rowval, (0, obj.shape[-1]-rowval.shape[-1]), mode='constant', value=0)
+        #print("diff", obj - out)
+        return obj
     ##################
 
     def load_network(self, which_epoch):

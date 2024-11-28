@@ -104,11 +104,11 @@ def fill_from_file(mesh, file):
             vs.append([float(v) for v in splitted_line[1:4]])
         elif splitted_line[0] == "f":
             face_vertex_ids = [int(c.split("/")[0]) for c in splitted_line[1:]]
-            assert len(face_vertex_ids) == 3
             face_vertex_ids = [
                 (ind - 1) if (ind >= 0) else (len(vs) + ind) for ind in face_vertex_ids
             ]
-            faces.append(face_vertex_ids)
+            for i in range(len(face_vertex_ids)-2):
+                faces.append([face_vertex_ids[0]]+face_vertex_ids[i+1:i+3])#Handles the occasional n-gon
     f.close()
     vs = np.asarray(vs)
     faces = np.asarray(faces, dtype=int)
@@ -162,11 +162,12 @@ def build_gemm(mesh, faces, face_areas):
             faces_edges.append(cur_edge)
             # Easy to retriweve edges in face, just grouped by 3 adjacent idx
             # Also, this is a halfedge datastructure
+        #Loop below builds ve, list of edges attached to a given vertex
         for idx, edge in enumerate(faces_edges):
-            edge = tuple(sorted(list(edge)))  # Why sort the vertices in edge?
+            edge = tuple(sorted(list(edge))) 
             faces_edges[idx] = edge
             if edge not in edge2key:
-                edge2key[edge] = edges_count  # this is probably why you need to sort
+                edge2key[edge] = edges_count  
                 edges.append(list(edge))
                 edge_nb.append([-1, -1, -1, -1])
                 sides.append([-1, -1, -1, -1])
@@ -178,6 +179,7 @@ def build_gemm(mesh, faces, face_areas):
                 nb_count.append(0)
                 edges_count += 1
             mesh.edge_areas[edge2key[edge]] += face_areas[face_id] / 3
+
         for idx, edge in enumerate(faces_edges):
             edge_key = edge2key[edge]
             edge_nb[edge_key][nb_count[edge_key]] = edge2key[faces_edges[(idx + 1) % 3]]
@@ -203,16 +205,19 @@ def build_gemm(mesh, faces, face_areas):
 
 
 def compute_face_normals_and_areas(mesh, faces):
-    face_normals = np.cross(
-        mesh.vs[faces[:, 1]] - mesh.vs[faces[:, 0]],
-        mesh.vs[faces[:, 2]] - mesh.vs[faces[:, 1]],
-    )
-    face_areas = np.sqrt((face_normals**2).sum(axis=1))
-    face_normals /= face_areas[:, np.newaxis]
-    assert not np.any(face_areas[:, np.newaxis] == 0), (
-        "has zero area face: %s" % mesh.filename
-    )
-    face_areas *= 0.5
+    try:
+        face_normals = np.cross(
+            mesh.vs[faces[:, 1]] - mesh.vs[faces[:, 0]],
+            mesh.vs[faces[:, 2]] - mesh.vs[faces[:, 1]],
+        )
+        face_areas = np.sqrt((face_normals**2).sum(axis=1))
+        face_normals /= face_areas[:, np.newaxis]
+        assert not np.any(face_areas[:, np.newaxis] == 0), (
+            "has zero area face: %s" % mesh.filename
+        )
+        face_areas *= 0.5
+    except Exception as e:
+        raise Exception(f"Problem with faces in mesh {mesh.filename}: {[f for f in faces]}.\n Exception: {str(e)}")
     return face_normals, face_areas
 
 
@@ -242,14 +247,17 @@ def slide_verts(mesh, prct):
     for vi in vids:
         if shifted < target:
             edges = mesh.ve[vi]
-            if min(dihedral[edges]) > 2.65:
-                edge = mesh.edges[np.random.choice(edges)]
-                vi_t = edge[1] if vi == edge[0] else edge[0]
-                nv = mesh.vs[vi] + np.random.uniform(0.2, 0.5) * (
-                    mesh.vs[vi_t] - mesh.vs[vi]
-                )
-                mesh.vs[vi] = nv
-                shifted += 1
+            try:
+                if min(dihedral[edges]) > 2.65:
+                    edge = mesh.edges[np.random.choice(edges)]
+                    vi_t = edge[1] if vi == edge[0] else edge[0]
+                    nv = mesh.vs[vi] + np.random.uniform(0.2, 0.5) * (
+                        mesh.vs[vi_t] - mesh.vs[vi]
+                    )
+                    mesh.vs[vi] = nv
+                    shifted += 1
+            except:
+                continue
         else:
             break
     mesh.shifted = shifted / len(mesh.ve)
@@ -384,8 +392,7 @@ def extract_features(mesh):
             for extractor in [
                 dihedral_angle,
                 symmetric_opposite_angles,
-                symmetric_ratios,
-                dot_skew,
+                symmetric_ratios
             ]:
                 feature = extractor(mesh, edge_points)
                 features.append(feature)

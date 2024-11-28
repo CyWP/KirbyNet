@@ -5,11 +5,13 @@ from models.layers.mesh_union import MeshUnion
 import numpy as np
 from heapq import heappop, heapify
 
+from exceptions import MaxPooledException
 
 class MeshPool(nn.Module):
 
     def __init__(self, target, multi_thread=False):
         super(MeshPool, self).__init__()
+        #Target number of edges
         self.__out_target = target
         self.__multi_thread = multi_thread
         self.__fe = None
@@ -42,16 +44,21 @@ class MeshPool(nn.Module):
 
     def __pool_main(self, mesh_index):
         mesh = self.__meshes[mesh_index]
+        #valid edges kept contiguously at start of tensor
         queue = self.__build_queue(
             self.__fe[mesh_index, :, : mesh.edges_count], mesh.edges_count
         )
+        init_queue_len = len(queue)
         # recycle = []
         # last_queue_len = len(queue)
         last_count = mesh.edges_count + 1
         mask = np.ones(mesh.edges_count, dtype=np.bool)
         edge_groups = MeshUnion(mesh.edges_count, self.__fe.device)
         while mesh.edges_count > self.__out_target:
-            value, edge_id = heappop(queue)
+            try:
+                value, edge_id = heappop(queue)
+            except Exception as e:
+                raise MaxPooledException(f"{mesh.origin_file} cannot be pooled to the desired resolution. You may want to remove it from the dataset.")
             edge_id = int(edge_id)
             if mask[edge_id]:
                 self.__pool_edge(mesh, edge_id, mask, edge_groups)
@@ -69,6 +76,7 @@ class MeshPool(nn.Module):
             and self.__clean_side(mesh, edge_id, mask, edge_groups, 2)
             and self.__is_one_ring_valid(mesh, edge_id)
         ):
+
             self.__merge_edges[0] = self.__pool_side(
                 mesh, edge_id, mask, edge_groups, 0
             )
@@ -244,7 +252,9 @@ class MeshPool(nn.Module):
         edge_ids = torch.arange(
             edges_count, device=squared_magnitude.device, dtype=torch.float32
         ).unsqueeze(-1)
+        #Line above implies that unpooled edges are kept contiguously at start of tensor, in index order.
         heap = torch.cat((squared_magnitude, edge_ids), dim=-1).tolist()
+        #Last dim is of size 2, with magnitude, idx
         heapify(heap)
         return heap
 

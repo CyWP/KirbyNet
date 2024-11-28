@@ -5,11 +5,12 @@ import numpy as np
 import os
 from models.layers.mesh_union import MeshUnion
 from models.layers.mesh_prepare import fill_mesh
+from models.layers.mesh_reconstruction import MeshReconstruction
 
 
 class Mesh:
 
-    def __init__(self, file=None, opt=None, hold_history=False, export_folder=""):
+    def __init__(self, file=None, opt=None, hold_history=True, export_folder="", max_num_edges=None):
         """
         Notes for self on member variables
         vs: (V x 3 list)vertices with actual 3d coordinates
@@ -23,11 +24,13 @@ class Mesh:
         history_data:
         """
         self.vs = self.v_mask = self.filename = self.features = self.edge_areas = None
+        self.origin_file =file
         self.edges = self.gemm_edges = self.sides = None
         self.pool_count = 0
         fill_mesh(self, file, opt)
         self.export_folder = export_folder
         self.history_data = None
+        self.reconstruction = MeshReconstruction(self)
         if hold_history:
             self.init_history()
         self.export()
@@ -54,6 +57,7 @@ class Mesh:
         self.v_mask[v] = False
 
     def remove_edge(self, edge_id):
+        #only edits self.ve
         vs = self.edges[edge_id]
         for v in vs:
             if edge_id not in self.ve[v]:
