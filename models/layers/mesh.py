@@ -1,5 +1,6 @@
 from tempfile import mkstemp
 from shutil import move
+from scipy.sparse import lil_matrix, csr_matrix
 import torch
 import numpy as np
 import os
@@ -52,6 +53,17 @@ class Mesh:
         self.edges[mask] = edge[
             0
         ]  # Essentially replacing all connection of since delted point with the new averaged point.
+        #Update face representations
+        iv_a = edge[0]
+        iv_b = edge[1]
+        for f_idx in self.vf[iv_b]:
+            f = self.faces[f_idx]
+            if f_idx in self.vf[iv_a]:
+                self.vf[iv_a].remove(f_idx)
+                self.faces_mask[f_idx] = False
+            else:
+                self.faces[f_idx][f.index(iv_b)] = iv_a
+        self.vf[iv_b] = []
 
     def remove_vertex(self, v):
         self.v_mask[v] = False
@@ -253,3 +265,45 @@ class Mesh:
 
     def get_edge_areas(self):
         return self.edge_areas
+
+    def mean_curvature_energy(self):
+        V = self.vs[self.v_mask, :]
+        L = csr_matrix(self.compute_laplacian())
+        return np.mean(np.abs(L @ V))
+
+    def compute_laplacian(self):
+        faces = self.faces[self.faces_mask]
+        vertices = self.vs
+        n_vertices = vertices.shape[0]
+        # Initialize a sparse matrix for the Laplacian
+        L = lil_matrix((n_vertices, n_vertices))
+        # Loop over all triangles (faces)
+        for face in faces:
+            i, j, k = face
+            # Vertices of the triangle
+            vi, vj, vk = vertices[i], vertices[j], vertices[k]
+            # Cotangent weights for the edges
+            cot_jk = 0.5 * cotangent(vi, vj, vk)  # Cotangent at vertex vi (opposite edge vj-vk)
+            cot_ik = 0.5 * cotangent(vj, vk, vi)  # Cotangent at vertex vj (opposite edge vi-vk)
+            cot_ij = 0.5 * cotangent(vk, vi, vj)  # Cotangent at vertex vk (opposite edge vi-vj)
+            # Update the Laplacian matrix using cotangent weights
+            L[i, i] -= cot_ij + cot_ik
+            L[j, j] -= cot_jk + cot_ij
+            L[k, k] -= cot_jk + cot_ik
+            L[i, j] += cot_ij
+            L[j, i] += cot_ij
+            L[i, k] += cot_ik
+            L[k, i] += cot_ik
+            L[j, k] += cot_jk
+            L[k, j] += cot_jk
+        valid_idx = np.where(self.v_mask)[0]
+        return L[valid_idx, :][:, valid_idx]
+
+def cotangent(v1, v2, v3):
+    # Vectors along the triangle edges
+    u = v2 - v1
+    v = v3 - v1
+    # Compute cotangent using dot product and cross product
+    cos_angle = np.dot(u, v)
+    sin_angle = np.linalg.norm(np.cross(u, v))
+    return cos_angle / (sin_angle + 10e-6)

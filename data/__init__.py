@@ -27,6 +27,8 @@ class DataLoader:
     def __init__(self, opt):
         self.opt = opt
         self.dataset = CreateDataset(opt)
+        self.mean = self.dataset.mean
+        self.std = self.dataset.std
         self.dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_size=opt.batch_size,

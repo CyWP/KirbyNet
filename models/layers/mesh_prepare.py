@@ -25,7 +25,9 @@ def fill_mesh(mesh2fill, file: str, opt):
     mesh2fill.edge_areas = mesh_data["edge_areas"]
     mesh2fill.features = mesh_data["features"]
     mesh2fill.sides = mesh_data["sides"]
-
+    mesh2fill.faces = mesh_data["faces"]
+    mesh2fill.vf = mesh_data["vf"]
+    mesh2fill.faces_mask = mesh_data["faces_mask"]
 
 def get_mesh_path(file: str, num_aug: int):
     filename, _ = os.path.splitext(file)
@@ -58,13 +60,18 @@ class MeshPrep:
             edge_lengths=self.edge_lengths,
             edge_areas=self.edge_areas,
             features=self.features,
+            faces=self.faces,
+            vf=np.void(pickle.dumps(self.vf)),
+            faces_mask=self.faces_mask,
         )
 
     def load(self, file):
         data = np.load(file)
         for key, value in data.items():
-            setattr(self, key, value)
-        self.ve = pickle.loads(self.ve.tobytes())
+            if key not in ('ve', 'vf'):
+                setattr(self, key, value)
+        self.ve = pickle.loads(data['ve'].tobytes())
+        self.vf = pickle.loads(data['vf'].tobytes())
 
 
 def from_scratch(file, opt):
@@ -86,6 +93,9 @@ def from_scratch(file, opt):
     build_gemm(mesh_data, faces, face_areas)
     if opt.num_aug > 1:
         post_augmentation(mesh_data, opt)
+    mesh_data.faces = faces
+    mesh_data.vf = get_vf(faces, mesh_data.vs.shape[0])
+    mesh_data.faces_mask = np.ones((faces.shape[0],), dtype=bool)
     mesh_data.features = extract_features(mesh_data)
     return mesh_data
 
@@ -203,6 +213,12 @@ def build_gemm(mesh, faces, face_areas):
         face_areas
     )  # todo whats the difference between edge_areas and edge_lenghts?
 
+def get_vf(faces, num_v):
+    vf = [[] for _ in range(num_v)]
+    for f_idx, face in enumerate(faces):
+        for v in face:
+            vf[v].append(f_idx)
+    return vf
 
 def compute_face_normals_and_areas(mesh, faces):
     try:

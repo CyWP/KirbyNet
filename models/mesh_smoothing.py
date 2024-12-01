@@ -7,18 +7,15 @@ from util.util import seg_accuracy, print_network
 import numpy as np
 
 class SmoothingModel:
-    """Class for training Model weights
-
-    :args opt: structure containing configuration params
-    e.g.,
-    --dataset_mode -> classification / segmentation)
-    --arch -> network type
+    """
+    Class for training Model weights
     """
 
     def __init__(self, opt):
         self.opt = opt
         self.gpu_ids = opt.gpu_ids
         self.is_train = opt.is_train
+        self.mean = self.std = None
         self.device = (
             torch.device("cuda:{}".format(self.gpu_ids[0]))
             if self.gpu_ids
@@ -29,6 +26,7 @@ class SmoothingModel:
         self.edge_features = None
         self.mesh = None
         self.loss = None
+        self.energy = self.out_var = self.out_norm = self.out_mean = None
 
         # load/define networks
         self.net = networks.define_classifier(
@@ -62,18 +60,28 @@ class SmoothingModel:
             self.is_train
         )
         self.mesh = data["mesh"]
-        #Debugging to figure out organization of data
-        #print(f"Edge features Shape: {self.edge_features.shape}")
+
+    def get_training_stats(self):
+        return {'norm':self.out_norm, 'energy': self.energy, 'mean': self.out_mean, 'var': self.out_var}
+    
+    def get_mesh_energy(self):
+        if self.mesh is None:
+            return None
+        return np.array([m.mean_curvature_energy() for m in self.mesh])
 
     def forward(self):
         out = self.net(self.edge_features, self.mesh)
         return out
 
     def backward(self, out):
-        norm = torch.norm(out)
+        norm = torch.norm(out).item()
         inorm = 1/norm
-        print("norm", norm)
-        self.loss = self.criterion(out*inorm, self.objective(out)*inorm)*norm
+        self.energy = self.get_mesh_energy()
+        self.out_norm = norm
+        self.out_mean = torch.mean(out**2).item()
+        self.out_var = out.var().item()
+        obj = self.objective(out)
+        self.loss = self.criterion(out, obj)+0.005/self.out_mean
         self.loss.backward()
 
     def optimize_parameters(self):
@@ -88,42 +96,49 @@ class SmoothingModel:
         for mesh_idx in range(out.shape[0]):
             m = self.mesh[mesh_idx]
             for i in range(4):
-                """
-                rowval = out[mesh_idx, :, m.gemm_edges[:, i].reshape(-1)]
-                if out.shape[-1] != rowval.shape[-1]:
-                    rowval = ConstantPad2d((0, out.shape[-1]-rowval.shape[-1], 0, 0), 0)(rowval)
-                obj[mesh_idx] += 0.2 * rowval
-                """
                 rowval = torch.sum(out[mesh_idx, :, m.gemm_edges[:, i].reshape(-1)], dim=0)
                 obj[mesh_idx] += 0.2 * F.pad(rowval, (0, obj.shape[-1]-rowval.shape[-1]), mode='constant', value=0)
-        #print("diff", obj - out)
         return obj
     ##################
+    
+    def set_mean_std(self, mean, std):
+        self.mean = mean
+        self.std = std
 
     def load_network(self, which_epoch):
-        """load model from disk"""
+        """Load model and options from disk."""
         save_filename = "%s_net.pth" % which_epoch
         load_path = join(self.save_dir, save_filename)
         net = self.net
         if isinstance(net, torch.nn.DataParallel):
             net = net.module
-        print("loading the model from %s" % load_path)
-        # PyTorch newer than 0.4 (e.g., built from
-        # GitHub source), you can remove str() on self.device
-        state_dict = torch.load(load_path, map_location=str(self.device))
+        print("Loading the model and options from %s" % load_path)
+        checkpoint = torch.load(load_path, map_location=str(self.device))
+        state_dict = checkpoint['model_state_dict']
         if hasattr(state_dict, "_metadata"):
             del state_dict._metadata
         net.load_state_dict(state_dict)
+        opt = checkpoint.get('opt', {})
 
     def save_network(self, which_epoch):
-        """save model to disk"""
-        save_filename = "%s_net.pth" % (which_epoch)
+        """Save model and options to disk."""
+        save_filename = "%s_net.pth" % which_epoch
         save_path = join(self.save_dir, save_filename)
+        opt_dict = vars(self.opt)
+        for k, v in opt_dict.items():
+            if isinstance(v, np.ndarray):
+                opt_dict[k] = v.tolist()
+            mean = self.mean.tolist() if isinstance(self.mean, np.ndarray) else self.mean
+            std = self.std.tolist() if isinstance(self.std, np.ndarray) else self.std
+        checkpoint = {
+            'model_state_dict': self.net.module.cpu().state_dict() if len(self.gpu_ids) > 0 and torch.cuda.is_available() else self.net.cpu().state_dict(),
+            'opt': opt_dict,
+            'mean': mean,
+            'std': std
+        }
+        torch.save(checkpoint, save_path)
         if len(self.gpu_ids) > 0 and torch.cuda.is_available():
-            torch.save(self.net.module.cpu().state_dict(), save_path)
             self.net.cuda(self.gpu_ids[0])
-        else:
-            torch.save(self.net.cpu().state_dict(), save_path)
 
     def update_learning_rate(self):
         """update learning rate (called once every epoch)"""

@@ -191,15 +191,10 @@ class MeshSmoothNet(nn.Module):
             setattr(self, "pool{}".format(i), MeshPool(self.res[i + 1]))
 
     def forward(self, x, mesh):
-        #print(f"Entering. num_edges: {mesh[0].edges_count}, gemm: {mesh[0].gemm_edges.shape}")
         for i in range(len(self.k) - 1):
             x = getattr(self, "conv{}".format(i))(x, mesh)
             x = F.relu(getattr(self, "norm{}".format(i))(x))
             x = getattr(self, "pool{}".format(i))(x, mesh)
-            #print(f"After pool{i}. x: {x.shape}, num_edges:{mesh[0].edges_count} gemm: {mesh[0].gemm_edges.shape}")
-            #print(f"Shape after block {i}: {x.shape}")
-        #print("x: ", x[:, :, :])
-
         return x
 
 
@@ -268,8 +263,9 @@ class MResConv(nn.Module):
         for i in range(self.skips):
             x = getattr(self, "bn{}".format(i + 1))(F.relu(x))
             x = getattr(self, "conv{}".format(i + 1))(x, mesh)
-        x += x1
-        x = F.relu(x)
+            x = F.relu(x)
+        #x += x1
+        #x = F.relu(x)
         return x
 
 
@@ -289,8 +285,7 @@ class MeshEncoderDecoder(nn.Module):
     def forward(self, x, meshes):
         fe, before_pool = self.encoder((x, meshes))
         fe = self.decoder((fe, meshes), before_pool)
-        return fe
-
+        retur
     def __call__(self, x, meshes):
         return self.forward(x, meshes)
 
