@@ -1,0 +1,2 @@
+class MaxPooledException(Exception):
+    pass

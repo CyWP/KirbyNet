@@ -15,6 +15,7 @@ from models.layers.mesh_unpool import MeshUnpool
 
 
 def get_norm_layer(norm_type="instance", num_groups=1):
+    print(f"Num groups: {num_groups}")
     if norm_type == "batch":
         norm_layer = functools.partial(nn.BatchNorm2d, affine=True)
     elif norm_type == "instance":
@@ -39,6 +40,7 @@ def get_norm_args(norm_layer, nfeats_list):
         raise NotImplementedError(
             "normalization layer [%s] is not found" % norm_layer.func.__name__
         )
+    print(f"Norm args: {norm_args}")
     return norm_args
 
 
@@ -139,6 +141,16 @@ def define_classifier(
         net = MeshEncoderDecoder(
             pool_res, down_convs, up_convs, blocks=opt.resblocks, transfer_data=True
         )
+    elif arch == "msmoothnet":
+         net = MeshSmoothNet(
+            norm_layer,
+            input_nc,
+            ncf,
+            ninput_edges,
+            opt.pool_res,
+            opt.fc_n,
+            opt.resblocks,
+        )
     else:
         raise NotImplementedError("Encoder model name [%s] is not recognized" % arch)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -155,6 +167,35 @@ def define_loss(opt):
 ##############################################################################
 # Classes For Classification / Segmentation Networks
 ##############################################################################
+class MeshSmoothNet(nn.Module):
+    """Network learning to smooth meshes (unsupervised learning)"""
+
+    def __init__(
+        self,
+        norm_layer,
+        nf0,
+        conv_res,
+        input_res,
+        pool_res,
+        fc_n,
+        nresblocks=3,
+    ):
+        super(MeshSmoothNet, self).__init__()
+        self.k = [nf0] + conv_res
+        self.res = [input_res] + pool_res
+        norm_args = get_norm_args(norm_layer, self.k[1:])
+
+        for i, ki in enumerate(self.k[:-1]):
+            setattr(self, "conv{}".format(i), MResConv(ki, self.k[i + 1], nresblocks))
+            setattr(self, "norm{}".format(i), norm_layer(**norm_args[i]))
+            setattr(self, "pool{}".format(i), MeshPool(self.res[i + 1]))
+
+    def forward(self, x, mesh):
+        for i in range(len(self.k) - 1):
+            x = getattr(self, "conv{}".format(i))(x, mesh)
+            x = F.relu(getattr(self, "norm{}".format(i))(x))
+            x = getattr(self, "pool{}".format(i))(x, mesh)
+        return x
 
 
 class MeshConvNet(nn.Module):
@@ -192,6 +233,7 @@ class MeshConvNet(nn.Module):
             x = getattr(self, "conv{}".format(i))(x, mesh)
             x = F.relu(getattr(self, "norm{}".format(i))(x))
             x = getattr(self, "pool{}".format(i))(x, mesh)
+            #print(f"Shape after block {i}: {x.shape}")
 
         x = self.gp(x)
         x = x.view(-1, self.k[-1])
@@ -199,7 +241,6 @@ class MeshConvNet(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
-
 
 class MResConv(nn.Module):
     def __init__(self, in_channels, out_channels, skips=1):
@@ -222,8 +263,9 @@ class MResConv(nn.Module):
         for i in range(self.skips):
             x = getattr(self, "bn{}".format(i + 1))(F.relu(x))
             x = getattr(self, "conv{}".format(i + 1))(x, mesh)
-        x += x1
-        x = F.relu(x)
+            x = F.relu(x)
+        #x += x1
+        #x = F.relu(x)
         return x
 
 
@@ -243,6 +285,24 @@ class MeshEncoderDecoder(nn.Module):
     def forward(self, x, meshes):
         fe, before_pool = self.encoder((x, meshes))
         fe = self.decoder((fe, meshes), before_pool)
+        retur
+    def __call__(self, x, meshes):
+        return self.forward(x, meshes)
+
+
+class DownConv(nn.Module):
+    def __init__(self, in_channels, out_channels, blocks=0, pool=0):
+        super(DownConv, self).__init__()
+        self.bn = []
+        self.pool = None
+        self.conv1 = MeshConv(in_channels, out_channels)
+        self.conv2 = []
+        for _ in range(blocks):
+            self.conv2.append(MeshConv(out_channels, out_channels))
+            self.conv2 = nn.ModuleList(self.conv2)
+        for _ in range(blocks + 1):
+            self.bn.append(nn.InstanceNorm2d(out_channels))
+            self.bn = nn.ModuleList(self.bn)
         return fe
 
     def __call__(self, x, meshes):
@@ -279,7 +339,7 @@ class DownConv(nn.Module):
             x2 = conv(x1, meshes)
             if self.bn:
                 x2 = self.bn[idx + 1](x2)
-            x2 = x2 + x1
+            x2 = x2 + x1 #Cumulative/residual convolutions
             x2 = F.relu(x2)
             x1 = x2
         x2 = x2.squeeze(3)

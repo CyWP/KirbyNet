@@ -1,15 +1,17 @@
 from tempfile import mkstemp
 from shutil import move
+from scipy.sparse import lil_matrix, csr_matrix
 import torch
 import numpy as np
 import os
 from models.layers.mesh_union import MeshUnion
 from models.layers.mesh_prepare import fill_mesh
+from models.layers.mesh_reconstruction import MeshReconstruction
 
 
 class Mesh:
 
-    def __init__(self, file=None, opt=None, hold_history=False, export_folder=""):
+    def __init__(self, file=None, opt=None, hold_history=True, export_folder="", max_num_edges=None):
         """
         Notes for self on member variables
         vs: (V x 3 list)vertices with actual 3d coordinates
@@ -23,11 +25,13 @@ class Mesh:
         history_data:
         """
         self.vs = self.v_mask = self.filename = self.features = self.edge_areas = None
+        self.origin_file =file
         self.edges = self.gemm_edges = self.sides = None
         self.pool_count = 0
         fill_mesh(self, file, opt)
         self.export_folder = export_folder
         self.history_data = None
+        self.reconstruction = MeshReconstruction(self)
         if hold_history:
             self.init_history()
         self.export()
@@ -49,11 +53,23 @@ class Mesh:
         self.edges[mask] = edge[
             0
         ]  # Essentially replacing all connection of since delted point with the new averaged point.
+        #Update face representations
+        iv_a = edge[0]
+        iv_b = edge[1]
+        for f_idx in self.vf[iv_b]:
+            f = self.faces[f_idx]
+            if f_idx in self.vf[iv_a]:
+                self.vf[iv_a].remove(f_idx)
+                self.faces_mask[f_idx] = False
+            else:
+                self.faces[f_idx][f.index(iv_b)] = iv_a
+        self.vf[iv_b] = []
 
     def remove_vertex(self, v):
         self.v_mask[v] = False
 
     def remove_edge(self, edge_id):
+        #only edits self.ve
         vs = self.edges[edge_id]
         for v in vs:
             if edge_id not in self.ve[v]:
@@ -249,3 +265,45 @@ class Mesh:
 
     def get_edge_areas(self):
         return self.edge_areas
+
+    def mean_curvature_energy(self):
+        V = self.vs[self.v_mask, :]
+        L = csr_matrix(self.compute_laplacian())
+        return np.mean(np.abs(L @ V))
+
+    def compute_laplacian(self):
+        faces = self.faces[self.faces_mask]
+        vertices = self.vs
+        n_vertices = vertices.shape[0]
+        # Initialize a sparse matrix for the Laplacian
+        L = lil_matrix((n_vertices, n_vertices))
+        # Loop over all triangles (faces)
+        for face in faces:
+            i, j, k = face
+            # Vertices of the triangle
+            vi, vj, vk = vertices[i], vertices[j], vertices[k]
+            # Cotangent weights for the edges
+            cot_jk = 0.5 * cotangent(vi, vj, vk)  # Cotangent at vertex vi (opposite edge vj-vk)
+            cot_ik = 0.5 * cotangent(vj, vk, vi)  # Cotangent at vertex vj (opposite edge vi-vk)
+            cot_ij = 0.5 * cotangent(vk, vi, vj)  # Cotangent at vertex vk (opposite edge vi-vj)
+            # Update the Laplacian matrix using cotangent weights
+            L[i, i] -= cot_ij + cot_ik
+            L[j, j] -= cot_jk + cot_ij
+            L[k, k] -= cot_jk + cot_ik
+            L[i, j] += cot_ij
+            L[j, i] += cot_ij
+            L[i, k] += cot_ik
+            L[k, i] += cot_ik
+            L[j, k] += cot_jk
+            L[k, j] += cot_jk
+        valid_idx = np.where(self.v_mask)[0]
+        return L[valid_idx, :][:, valid_idx]
+
+def cotangent(v1, v2, v3):
+    # Vectors along the triangle edges
+    u = v2 - v1
+    v = v3 - v1
+    # Compute cotangent using dot product and cross product
+    cos_angle = np.dot(u, v)
+    sin_angle = np.linalg.norm(np.cross(u, v))
+    return cos_angle / (sin_angle + 10e-6)

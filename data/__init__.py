@@ -13,6 +13,11 @@ def CreateDataset(opt):
         from data.classification_data import ClassificationData
 
         dataset = ClassificationData(opt)
+    elif opt.dataset_mode == "unsupervised":
+        from data.unsupervised_data import UnsupervisedData 
+
+        dataset = UnsupervisedData(opt)
+
     return dataset
 
 
@@ -22,6 +27,8 @@ class DataLoader:
     def __init__(self, opt):
         self.opt = opt
         self.dataset = CreateDataset(opt)
+        self.mean = self.dataset.mean
+        self.std = self.dataset.std
         self.dataloader = torch.utils.data.DataLoader(
             self.dataset,
             batch_size=opt.batch_size,
